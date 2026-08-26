@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     # Ollama LLM Settings
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:7b"
+    REWRITE_MODEL: str = "qwen3:4b"
     OLLAMA_TEMPERATURE: float = 0.2
 
     # Embeddings (Local CPU FastEmbed)
@@ -37,8 +38,9 @@ class Settings(BaseSettings):
     ALLOWED_EXTENSIONS: set[str] = {".pdf", ".md", ".markdown"}
     ENABLE_MAGIC_BYTE_CHECK: bool = True
 
-    # Conversational Memory
+    # Conversational Memory & Query Rewriting
     MEMORY_WINDOW_TURNS: int = 5
+    ENABLE_FAST_PATH_BYPASS: bool = False
 
     # Storage Paths
     BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent.parent
