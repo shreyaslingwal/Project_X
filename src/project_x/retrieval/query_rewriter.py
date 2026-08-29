@@ -45,6 +45,8 @@ class QueryRewriter:
             base_url=settings.OLLAMA_BASE_URL,
             model=settings.REWRITE_MODEL,
             temperature=0.0,
+            num_ctx=settings.OLLAMA_NUM_CTX,
+            keep_alive=settings.OLLAMA_KEEP_ALIVE,
         )
 
     def _clean_output(self, raw: str) -> str:

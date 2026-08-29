@@ -1,13 +1,14 @@
-"""Interactive CLI Demo to test the full pipeline (Milestones 1 -> 2 -> 3).
+"""Interactive CLI Demo for the full RAG Pipeline (Milestones 1 -> 5).
 
-Allows you to ingest any custom PDF or Markdown file, index it into FAISS,
-and ask questions to test the 2-stage retrieval and re-ranking live.
+Tests the complete end-to-end flow: Ingestion, Embeddings, FAISS,
+FlashRank Re-ranking, Conversational Memory, Query Rewriting,
+Grounded Generation with real-time token streaming, and Citation mapping.
 
 Usage:
     # Test with a specific file:
     uv run python scripts/demo_pipeline.py --file "C:/path/to/your_document.pdf"
 
-    # Ingest all files in data/uploads/ and start search:
+    # Ingest all files in data/uploads/ and start chat:
     uv run python scripts/demo_pipeline.py
 
     # Clear old index and start fresh:
@@ -16,6 +17,7 @@ Usage:
 
 import argparse
 import sys
+import uuid
 from pathlib import Path
 
 # Add src to path
@@ -25,17 +27,21 @@ sys.path.insert(0, str(project_root / "src"))
 from project_x.core.config import settings
 from project_x.core.vector_store import FAISSVectorStore
 from project_x.ingestion.loader import ingest_file
+from project_x.rag.pipeline import RAGPipeline
 from project_x.retrieval.retriever import TwoStageRetriever
 
 
 def print_banner():
     print("=" * 70)
-    print("Project X - Pipeline Interactive Demo (Milestones 1, 2, 3)")
+    print("Project X - Full RAG Pipeline Demo (Milestones 1-5)")
     print("=" * 70)
     print("1. Ingestion: PDF (PyMuPDF) / Markdown with exact page/section tracking")
     print("2. Embeddings: FastEmbed CPU (BAAI/bge-small-en-v1.5, 384-dim)")
     print("3. Vector Store: FAISS IndexFlatIP (Cosine Similarity)")
     print("4. Re-ranking: FlashRank CPU Cross-Encoder (ms-marco-MiniLM-L-12-v2)")
+    print("5. Memory: Sliding-window conversation buffer (5 turns)")
+    print(f"6. Rewriter: {settings.REWRITE_MODEL} (Query contextualization)")
+    print(f"7. Generator: {settings.OLLAMA_MODEL} (Grounded streaming generation)")
     print("=" * 70)
     print()
 
@@ -46,10 +52,8 @@ def ingest_custom_file(file_path: Path, vector_store: FAISSVectorStore) -> None:
         print(f"[ERROR] File not found: {file_path}")
         return
 
-    # If the file is not in data/uploads, copy it or ingest directly
     print(f"\nIngesting custom document: {file_path.name}...")
     try:
-        # Check if already indexed
         indexed_docs = vector_store.list_documents()
         already_indexed = any(d["source"] == file_path.name for d in indexed_docs)
         if already_indexed:
@@ -57,12 +61,10 @@ def ingest_custom_file(file_path: Path, vector_store: FAISSVectorStore) -> None:
             choice = input("Do you want to re-index it? (y/n): ").strip().lower()
             if choice != "y":
                 return
-            # Remove old version before re-indexing
             for d in indexed_docs:
                 if d["source"] == file_path.name:
                     vector_store.delete_document(d["doc_id"])
 
-        # If outside upload dir, copy into upload dir for security compliance
         target_path = file_path
         if not file_path.resolve().is_relative_to(settings.UPLOAD_DIR.resolve()):
             target_path = settings.UPLOAD_DIR / file_path.name
@@ -105,7 +107,7 @@ def ingest_all_uploads(vector_store: FAISSVectorStore) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test 2-Stage RAG Pipeline with your own documents.")
+    parser = argparse.ArgumentParser(description="Full RAG Pipeline Demo with streaming generation.")
     parser.add_argument("--file", "-f", type=str, help="Path to a PDF or Markdown file to ingest and test.")
     parser.add_argument("--clear", "-c", action="store_true", help="Clear the existing vector store before starting.")
     args = parser.parse_args()
@@ -120,15 +122,15 @@ def main():
         vector_store.clear_index()
         print("Vector store cleared.\n")
 
-    # Ingest file specified via CLI argument
     if args.file:
         custom_file_path = Path(args.file)
         ingest_custom_file(custom_file_path, vector_store)
 
-    # Ingest any other files present in data/uploads/
     ingest_all_uploads(vector_store)
 
+    # Build pipeline with shared vector store
     retriever = TwoStageRetriever(vector_store=vector_store)
+    pipeline = RAGPipeline(retriever=retriever)
 
     indexed_docs = vector_store.list_documents()
     print("=" * 70)
@@ -145,35 +147,46 @@ def main():
         print(f"  2. Or run: uv run python scripts/demo_pipeline.py --file \"path/to/your_document.pdf\"\n")
         return
 
-    print("\nReady for live search! Ask any question based on your indexed document(s).")
-    print("Type 'exit' or 'quit' to stop.\n")
+    # Generate a unique session ID for this demo run
+    session_id = f"demo_{uuid.uuid4().hex[:8]}"
+    print(f"\nSession: {session_id}")
+    print("Ready for grounded chat! Responses stream in real-time with source citations.")
+    print("Type 'exit' or 'quit' to stop. Type 'clear' to reset conversation.\n")
 
     while True:
         try:
-            query = input("\nEnter query: ").strip()
+            query = input("\nYou: ").strip()
             if not query:
                 continue
             if query.lower() in ("exit", "quit"):
                 print("Exiting demo.")
                 break
-
-            print(f"\n[Searching for]: '{query}'")
-            print("Retrieving from FAISS (Top-15) -> Re-ranking with FlashRank (Top-4)...")
-
-            results = retriever.retrieve(query, top_k_initial=15, top_k_final=4)
-
-            if not results:
-                print("No relevant chunks found.")
+            if query.lower() == "clear":
+                pipeline.memory.clear_session(session_id)
+                print("[Session memory cleared]")
                 continue
 
-            print(f"\n--- Top {len(results)} Re-Ranked Results (Passed to Qwen) ---")
-            for rank, (chunk, score) in enumerate(results, 1):
-                page_str = f"Page {chunk.metadata.page}" if chunk.metadata.page else f"Section: {chunk.metadata.section}"
-                print(f"\n[Result {rank}] Confidence Score: {score:.4f} | Source: {chunk.metadata.source} ({page_str})")
-                print(f"Chunk ID: {chunk.chunk_id}")
-                print(f"Excerpt: \"{chunk.text.strip()}\"")
+            print("\nAssistant: ", end="", flush=True)
 
-            print("\n" + "=" * 70)
+            citations = []
+            for event in pipeline.stream_query(session_id, query):
+                if event.type == "token":
+                    print(event.content, end="", flush=True)
+                elif event.type == "citations":
+                    citations = event.citations
+                elif event.type == "error":
+                    print(f"\n[ERROR] {event.content}")
+
+            print()  # Newline after streamed response
+
+            if citations:
+                print(f"\n--- Sources ({len(citations)} cited) ---")
+                for c in citations:
+                    loc = f"Page {c.page}" if c.page else f"Section: {c.section}"
+                    print(f"  [{c.citation_index}] {c.source} ({loc})")
+                    print(f"      \"{c.snippet[:120]}...\"")
+
+            print()
 
         except (KeyboardInterrupt, EOFError):
             print("\nExiting demo.")

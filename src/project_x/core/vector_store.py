@@ -225,6 +225,18 @@ class FAISSVectorStore:
         meta_path.unlink(missing_ok=True)
         logger.info("Index cleared and disk files removed from %s", self._index_dir)
 
+    def get_all_chunks(self) -> list[DocumentChunk]:
+        """Reconstruct all stored DocumentChunk objects from metadata.
+
+        Used by the hybrid retriever to hydrate the BM25 sparse index
+        from persisted FAISS metadata on startup.
+        """
+        chunks = []
+        for idx in sorted(self._metadata.keys()):
+            chunk_data = self._metadata[idx]
+            chunks.append(DocumentChunk(**chunk_data))
+        return chunks
+
     @property
     def total_chunks(self) -> int:
         """Total number of vectors in the index."""

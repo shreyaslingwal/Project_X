@@ -14,9 +14,11 @@ class Settings(BaseSettings):
 
     # Ollama LLM Settings
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "qwen2.5:7b"
-    REWRITE_MODEL: str = "qwen3:4b"
+    OLLAMA_MODEL: str = "qwen2.5:3b"
+    REWRITE_MODEL: str = "qwen2.5:3b"
     OLLAMA_TEMPERATURE: float = 0.2
+    OLLAMA_NUM_CTX: int = 2048
+    OLLAMA_KEEP_ALIVE: str = "10m"
 
     # Embeddings (Local CPU FastEmbed)
     EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
@@ -27,6 +29,11 @@ class Settings(BaseSettings):
     # Retrieval Settings
     TOP_K_RETRIEVAL: int = 15
     TOP_K_RERANK: int = 4
+
+    # Hybrid Retrieval (Dense + Sparse BM25)
+    ENABLE_HYBRID_SEARCH: bool = True
+    TOP_K_BM25: int = 15
+    RRF_K: int = 60
 
     # Ingestion & Chunking Settings
     CHUNK_SIZE: int = 700
