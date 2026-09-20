@@ -81,3 +81,20 @@ class HealthResponse(BaseModel):
     reranker_model: str
     total_documents: int
     total_chunks: int
+
+
+class SummaryRequest(BaseModel):
+    """Request body for the studio document summary endpoint."""
+
+    doc_ids: list[str] | None = Field(
+        default=None, description="Document IDs to summarize (None = all indexed)"
+    )
+    stream: bool = Field(default=True, description="Enable SSE token streaming")
+
+
+class SummaryResponse(BaseModel):
+    """Response for non-streaming summary generation."""
+
+    summary: str = Field(description="Full generated summary text")
+    doc_count: int = Field(description="Number of documents included in the summary")
+    chunk_count: int = Field(description="Number of chunks used for generation")

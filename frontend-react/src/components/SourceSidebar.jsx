@@ -10,6 +10,7 @@ export default function SourceSidebar({
   onClearAll,
   onUploadMultiple,
   onDeleteDoc,
+  onSummarize,
   uploadProgress,
   isUploading,
   isCollapsed,
@@ -168,6 +169,7 @@ export default function SourceSidebar({
                   isSelected={selectedDocIds.has(doc.doc_id)}
                   onToggle={onToggleDoc}
                   onDelete={onDeleteDoc}
+                  onSummarize={onSummarize}
                 />
               ))
             )}

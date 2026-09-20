@@ -54,3 +54,4 @@ pyproject.toml
 ROADMAP.md
 uv.lock
 scripts/
+uv_commands.txt

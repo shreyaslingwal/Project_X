@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Header from './components/Header';
 import SourceSidebar from './components/SourceSidebar';
 import ChatPane from './components/ChatPane';
-import CitationInspector from './components/CitationInspector';
+import StudioPanel from './components/StudioPanel';
 import NotebooksView from './components/NotebooksView';
 import SettingsModal from './components/SettingsModal';
 import HelpModal from './components/HelpModal';
@@ -13,6 +13,7 @@ import {
   deleteDocument,
   streamChat,
   clearChat,
+  streamSummary,
 } from './services/api';
 
 export default function App() {
@@ -28,11 +29,22 @@ export default function App() {
   const [uploadProgress, setUploadProgress] = useState(null);
   const [isClearing, setIsClearing] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [activeCitation, setActiveCitation] = useState(null);
-  const [activeCitationIndex, setActiveCitationIndex] = useState(1);
   const [errorMessage, setErrorMessage] = useState(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+
+  // Right panel state (unified Studio + Inspector)
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+  const [rightPanelMode, setRightPanelMode] = useState('studio'); // 'studio' | 'inspector'
+  const [activeCitation, setActiveCitation] = useState(null);
+  const [activeCitationIndex, setActiveCitationIndex] = useState(1);
+
+  // Studio state
+  const [studioSelectedDocId, setStudioSelectedDocId] = useState('all');
+  const [summaries, setSummaries] = useState({}); // { [scopeKey]: summaryText }
+  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [summaryError, setSummaryError] = useState(null);
+  const summaryControllerRef = useRef(null);
 
   // Notebooks state (Stitch Screen 2 alignment)
   const [notebooks, setNotebooks] = useState([
@@ -126,6 +138,15 @@ export default function App() {
       if (activeCitation?.doc_id === docId) {
         setActiveCitation(null);
       }
+      // Clear cached summary if the deleted doc was the studio scope
+      if (studioSelectedDocId === docId) {
+        setSummaries((prev) => {
+          const next = { ...prev };
+          delete next[docId];
+          return next;
+        });
+        setStudioSelectedDocId('all');
+      }
     } catch (err) {
       setErrorMessage(err.message || 'Failed to delete document');
     }
@@ -168,6 +189,8 @@ export default function App() {
   const handleCitationClick = (citation, index) => {
     setActiveCitation(citation);
     setActiveCitationIndex(index || 1);
+    setRightPanelMode('inspector');
+    setIsRightPanelOpen(true);
   };
 
   const handleSelectNotebook = (nbId) => {
@@ -193,69 +216,184 @@ export default function App() {
     setActiveTab('chat');
   };
 
-  const handleSubmit = () => {
-    const query = inputQuery.trim();
-    if (!query || isStreaming) return;
+  const handleSubmit = useCallback(
+    (queryOverride) => {
+      const query = (queryOverride || inputQuery).trim();
+      if (!query || isStreaming) return;
 
-    setErrorMessage(null);
-    setInputQuery('');
+      setErrorMessage(null);
+      if (!queryOverride) setInputQuery('');
 
-    // Add user message
-    const userMsg = { role: 'user', content: query };
-    const initialAssistantMsg = { role: 'assistant', content: '', citations: [] };
+      // Add user message
+      const userMsg = { role: 'user', content: query };
+      const initialAssistantMsg = { role: 'assistant', content: '', citations: [] };
 
-    setMessages((prev) => [...prev, userMsg, initialAssistantMsg]);
-    setIsStreaming(true);
+      setMessages((prev) => [...prev, userMsg, initialAssistantMsg]);
+      setIsStreaming(true);
 
-    const docIdsList = Array.from(selectedDocIds);
+      const docIdsList = Array.from(selectedDocIds);
 
-    streamChat({
-      query,
-      docIds: docIdsList,
-      sessionId: activeNotebookId,
+      streamChat({
+        query,
+        docIds: docIdsList,
+        sessionId: activeNotebookId,
+        onToken: (token) => {
+          setMessages((prev) => {
+            const updated = [...prev];
+            const lastIdx = updated.length - 1;
+            if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+              updated[lastIdx] = {
+                ...updated[lastIdx],
+                content: updated[lastIdx].content + token,
+              };
+            }
+            return updated;
+          });
+        },
+        onCitations: (citations) => {
+          setMessages((prev) => {
+            const updated = [...prev];
+            const lastIdx = updated.length - 1;
+            if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+              updated[lastIdx] = {
+                ...updated[lastIdx],
+                citations: citations,
+              };
+            }
+            return updated;
+          });
+        },
+        onError: (err) => {
+          setErrorMessage(err);
+          setIsStreaming(false);
+        },
+        onDone: () => {
+          setIsStreaming(false);
+          // Update notebook turn count
+          setNotebooks((prev) =>
+            prev.map((nb) =>
+              nb.id === activeNotebookId
+                ? { ...nb, turnsCount: (nb.turnsCount || 0) + 1, updatedAt: 'Just now' }
+                : nb
+            )
+          );
+        },
+      });
+    },
+    [inputQuery, isStreaming, selectedDocIds, activeNotebookId]
+  );
+
+  // Studio: compute the summary cache key based on current scope
+  const getSummaryScopeKey = useCallback(
+    (docId) => {
+      if (docId === 'all') {
+        const sortedIds = Array.from(selectedDocIds).sort().join(',');
+        return `all:${sortedIds}`;
+      }
+      return docId;
+    },
+    [selectedDocIds]
+  );
+
+  // Studio: generate document summary with SSE streaming
+  const handleGenerateSummary = useCallback(() => {
+    const scopeKey = getSummaryScopeKey(studioSelectedDocId);
+
+    // Cancel any running summary stream
+    if (summaryControllerRef.current) {
+      summaryControllerRef.current.abort();
+    }
+
+    setIsSummarizing(true);
+    setSummaryError(null);
+    setSummaries((prev) => ({ ...prev, [scopeKey]: '' }));
+
+    const docIds =
+      studioSelectedDocId === 'all'
+        ? Array.from(selectedDocIds)
+        : [studioSelectedDocId];
+
+    summaryControllerRef.current = streamSummary({
+      docIds,
       onToken: (token) => {
-        setMessages((prev) => {
-          const updated = [...prev];
-          const lastIdx = updated.length - 1;
-          if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
-            updated[lastIdx] = {
-              ...updated[lastIdx],
-              content: updated[lastIdx].content + token,
-            };
-          }
-          return updated;
-        });
-      },
-      onCitations: (citations) => {
-        setMessages((prev) => {
-          const updated = [...prev];
-          const lastIdx = updated.length - 1;
-          if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
-            updated[lastIdx] = {
-              ...updated[lastIdx],
-              citations: citations,
-            };
-          }
-          return updated;
-        });
+        setSummaries((prev) => ({
+          ...prev,
+          [scopeKey]: (prev[scopeKey] || '') + token,
+        }));
       },
       onError: (err) => {
-        setErrorMessage(err);
-        setIsStreaming(false);
+        setSummaryError(err);
+        setIsSummarizing(false);
       },
       onDone: () => {
-        setIsStreaming(false);
-        // Update notebook turn count
-        setNotebooks((prev) =>
-          prev.map((nb) =>
-            nb.id === activeNotebookId
-              ? { ...nb, turnsCount: (nb.turnsCount || 0) + 1, updatedAt: 'Just now' }
-              : nb
-          )
-        );
+        setIsSummarizing(false);
       },
     });
-  };
+  }, [studioSelectedDocId, selectedDocIds, getSummaryScopeKey]);
+
+  // Studio: regenerate (clear cache and re-run)
+  const handleRegenerateSummary = useCallback(() => {
+    const scopeKey = getSummaryScopeKey(studioSelectedDocId);
+    setSummaries((prev) => {
+      const next = { ...prev };
+      delete next[scopeKey];
+      return next;
+    });
+    // Trigger after state clears
+    setTimeout(() => handleGenerateSummary(), 0);
+  }, [studioSelectedDocId, getSummaryScopeKey, handleGenerateSummary]);
+
+  // Studio: handle summarize button click from document card
+  const handleSummarizeDoc = useCallback(
+    (docId) => {
+      setStudioSelectedDocId(docId);
+      setRightPanelMode('studio');
+      setIsRightPanelOpen(true);
+      // Auto-generate if no cached summary
+      const scopeKey = getSummaryScopeKey(docId);
+      if (!summaries[scopeKey]) {
+        // Delay to let state settle before triggering
+        setTimeout(() => {
+          setIsSummarizing(true);
+          setSummaryError(null);
+          setSummaries((prev) => ({ ...prev, [docId]: '' }));
+
+          summaryControllerRef.current = streamSummary({
+            docIds: [docId],
+            onToken: (token) => {
+              setSummaries((prev) => ({
+                ...prev,
+                [docId]: (prev[docId] || '') + token,
+              }));
+            },
+            onError: (err) => {
+              setSummaryError(err);
+              setIsSummarizing(false);
+            },
+            onDone: () => {
+              setIsSummarizing(false);
+            },
+          });
+        }, 50);
+      }
+    },
+    [getSummaryScopeKey, summaries]
+  );
+
+  // Studio: handle suggested query chip click
+  const handleSuggestedQuery = useCallback(
+    (query) => {
+      setInputQuery(query);
+      setRightPanelMode('studio');
+      // Auto-submit
+      handleSubmit(query);
+    },
+    [handleSubmit]
+  );
+
+  // Get current summary text from cache
+  const currentScopeKey = getSummaryScopeKey(studioSelectedDocId);
+  const currentSummaryText = summaries[currentScopeKey] || '';
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-background text-neutral-dark font-body">
@@ -293,6 +431,7 @@ export default function App() {
             onClearAll={handleClearAll}
             onUploadMultiple={handleUploadMultiple}
             onDeleteDoc={handleDeleteDoc}
+            onSummarize={handleSummarizeDoc}
             uploadProgress={uploadProgress}
             isUploading={isUploading}
             isCollapsed={isSidebarCollapsed}
@@ -312,14 +451,26 @@ export default function App() {
             errorMessage={errorMessage}
           />
 
-          {/* Right Drawer: Citation Inspector */}
-          {activeCitation && (
-            <CitationInspector
-              citation={activeCitation}
-              index={activeCitationIndex}
-              onClose={() => setActiveCitation(null)}
-            />
-          )}
+          {/* Right Panel: Studio + Citation Inspector */}
+          <StudioPanel
+            isOpen={isRightPanelOpen}
+            onToggleOpen={() => setIsRightPanelOpen(!isRightPanelOpen)}
+            panelMode={rightPanelMode}
+            onSetPanelMode={setRightPanelMode}
+            documents={documents}
+            selectedDocIds={selectedDocIds}
+            studioSelectedDocId={studioSelectedDocId}
+            onStudioDocChange={setStudioSelectedDocId}
+            summaryText={currentSummaryText}
+            isSummarizing={isSummarizing}
+            onGenerateSummary={handleGenerateSummary}
+            onRegenerateSummary={handleRegenerateSummary}
+            summaryError={summaryError}
+            activeCitation={activeCitation}
+            activeCitationIndex={activeCitationIndex}
+            onCloseInspector={() => setActiveCitation(null)}
+            onSuggestedQuery={handleSuggestedQuery}
+          />
         </div>
       )}
 

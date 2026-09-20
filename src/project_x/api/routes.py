@@ -27,12 +27,15 @@ from project_x.api.schemas import (
     DocumentItem,
     DocumentListResponse,
     HealthResponse,
+    SummaryRequest,
+    SummaryResponse,
     UploadResponse,
 )
 from project_x.core.config import settings
 from project_x.core.vector_store import FAISSVectorStore
 from project_x.ingestion.loader import ingest_file
 from project_x.rag.pipeline import RAGPipeline
+from project_x.rag.summarizer import DocumentSummarizer, get_document_summarizer
 from project_x.retrieval.retriever import TwoStageRetriever
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,7 @@ router = APIRouter(prefix="/api", tags=["api"])
 # Shared singleton instances initialized at module scope
 _vector_store: FAISSVectorStore | None = None
 _pipeline: RAGPipeline | None = None
+_summarizer: DocumentSummarizer | None = None
 
 
 def _get_vector_store() -> FAISSVectorStore:
@@ -60,6 +64,35 @@ def _get_pipeline() -> RAGPipeline:
         retriever = TwoStageRetriever(vector_store=vs)
         _pipeline = RAGPipeline(retriever=retriever)
     return _pipeline
+
+
+def _get_summarizer() -> DocumentSummarizer:
+    """Lazy singleton for the document summarizer."""
+    global _summarizer
+    if _summarizer is None:
+        _summarizer = get_document_summarizer()
+    return _summarizer
+
+
+def _get_chunks_for_docs(
+    doc_ids: list[str] | None = None,
+) -> tuple[list, list[str], int]:
+    """Retrieve stored chunks filtered by doc_ids.
+
+    Returns:
+        Tuple of (filtered_chunks, matched_doc_ids, total_docs_in_scope).
+    """
+    vs = _get_vector_store()
+    all_chunks = vs.get_all_chunks()
+
+    if not doc_ids:
+        unique_ids = list({c.metadata.doc_id for c in all_chunks})
+        return all_chunks, unique_ids, len(unique_ids)
+
+    doc_id_set = set(doc_ids)
+    filtered = [c for c in all_chunks if c.metadata.doc_id in doc_id_set]
+    matched_ids = list({c.metadata.doc_id for c in filtered})
+    return filtered, matched_ids, len(matched_ids)
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -271,4 +304,72 @@ async def get_chat_history(session_id: str):
         session_id=session_id,
         messages=[m.model_dump() for m in messages],
         turn_count=len(messages) // 2,
+    )
+
+
+@router.post("/studio/summary")
+async def studio_summary(request: SummaryRequest):
+    """Generate a structured document summary with optional SSE streaming.
+
+    When stream=True (default), returns a text/event-stream with:
+        data: {"type": "token", "content": "..."}
+        data: {"type": "done"}
+
+    When stream=False, returns a JSON SummaryResponse.
+    """
+    chunks, matched_ids, doc_count = _get_chunks_for_docs(request.doc_ids)
+
+    if not chunks:
+        raise HTTPException(
+            status_code=404,
+            detail="No indexed chunks found for the requested documents.",
+        )
+
+    # Build a human-readable scope label for the prompt
+    vs = _get_vector_store()
+    doc_list = vs.list_documents()
+    id_to_name = {d["doc_id"]: d["source"] for d in doc_list}
+    if len(matched_ids) == 1:
+        source_name = id_to_name.get(matched_ids[0], "the selected document")
+    else:
+        source_name = f"{doc_count} selected documents"
+
+    summarizer = _get_summarizer()
+
+    if not request.stream:
+        summary_text = summarizer.summarize(chunks, source_name=source_name)
+        return SummaryResponse(
+            summary=summary_text,
+            doc_count=doc_count,
+            chunk_count=len(chunks),
+        )
+
+    # Streaming mode: SSE
+    async def event_generator():
+        try:
+            async for event in summarizer.astream_summary(
+                chunks, source_name=source_name
+            ):
+                if event.type == "token":
+                    payload = json.dumps({"type": "token", "content": event.content})
+                    yield f"data: {payload}\n\n"
+                elif event.type == "error":
+                    payload = json.dumps({"type": "error", "content": event.content})
+                    yield f"data: {payload}\n\n"
+                elif event.type == "done":
+                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        except Exception as exc:
+            logger.error("Studio summary SSE error: %s", exc)
+            error_payload = json.dumps({"type": "error", "content": str(exc)})
+            yield f"data: {error_payload}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )

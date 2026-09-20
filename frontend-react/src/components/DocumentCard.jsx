@@ -1,7 +1,7 @@
 import React from 'react';
-import { FileText, FileCode, Trash2, CheckSquare, Square, Layers, Bookmark } from 'lucide-react';
+import { FileText, FileCode, Trash2, CheckSquare, Square, Layers, Bookmark, BookOpen } from 'lucide-react';
 
-export default function DocumentCard({ doc, isSelected, onToggle, onDelete, isDeleting }) {
+export default function DocumentCard({ doc, isSelected, onToggle, onDelete, onSummarize, isDeleting }) {
   const isPdf = doc.source.toLowerCase().endsWith('.pdf');
 
   return (
@@ -36,7 +36,7 @@ export default function DocumentCard({ doc, isSelected, onToggle, onDelete, isDe
       </div>
 
       {/* Info */}
-      <div className="flex-1 min-w-0 pr-6">
+      <div className="flex-1 min-w-0 pr-12">
         <h4
           className="text-xs font-semibold text-neutral-dark truncate leading-snug cursor-pointer"
           onClick={() => onToggle(doc.doc_id)}
@@ -58,19 +58,35 @@ export default function DocumentCard({ doc, isSelected, onToggle, onDelete, isDe
         </div>
       </div>
 
-      {/* Delete Button */}
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete(doc.doc_id);
-        }}
-        disabled={isDeleting}
-        className="absolute top-2.5 right-2 p-1 text-neutral-light hover:text-error opacity-0 group-hover:opacity-100 rounded transition-all duration-150 cursor-pointer disabled:opacity-50"
-        title="Remove document from index"
-      >
-        <Trash2 className="w-3.5 h-3.5" />
-      </button>
+      {/* Action Buttons */}
+      <div className="absolute top-2.5 right-2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all duration-150">
+        {/* Summarize Button */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (onSummarize) onSummarize(doc.doc_id);
+          }}
+          className="p-1 text-neutral-light hover:text-primary rounded transition-all cursor-pointer"
+          title="Summarize this document"
+        >
+          <BookOpen className="w-3.5 h-3.5" />
+        </button>
+
+        {/* Delete Button */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(doc.doc_id);
+          }}
+          disabled={isDeleting}
+          className="p-1 text-neutral-light hover:text-error rounded transition-all cursor-pointer disabled:opacity-50"
+          title="Remove document from index"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
     </div>
   );
 }

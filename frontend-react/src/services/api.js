@@ -209,3 +209,84 @@ export async function clearChat(sessionId = 'default') {
 
   return response.json();
 }
+
+/**
+ * Stream a document summary via Server-Sent Events (SSE).
+ *
+ * @param {Object} params
+ * @param {string[]|null} [params.docIds=null] - Document IDs to summarize (null = all)
+ * @param {function(string): void} params.onToken - Called for each emitted token
+ * @param {function(string): void} params.onError - Called on error
+ * @param {function(): void} params.onDone - Called when streaming completes
+ * @returns {AbortController} - Controller to cancel the stream
+ */
+export function streamSummary({
+  docIds = null,
+  onToken = () => {},
+  onError = () => {},
+  onDone = () => {},
+}) {
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const response = await fetch(`${API_BASE}/studio/summary`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify({
+          doc_ids: docIds && docIds.length > 0 ? docIds : null,
+          stream: true,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Summary request failed: ${response.statusText}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
+
+          const dataStr = trimmed.replace(/^data:\s*/, '');
+          try {
+            const event = JSON.parse(dataStr);
+            if (event.type === 'token') {
+              onToken(event.content);
+            } else if (event.type === 'error') {
+              onError(event.content);
+            } else if (event.type === 'done') {
+              onDone();
+            }
+          } catch (jsonErr) {
+            console.warn('Failed to parse summary SSE payload:', dataStr, jsonErr);
+          }
+        }
+      }
+
+      onDone();
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        onError(err.message || 'Summary stream connection failed');
+      }
+    }
+  })();
+
+  return controller;
+}
