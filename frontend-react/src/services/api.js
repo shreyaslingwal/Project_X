@@ -215,6 +215,7 @@ export async function clearChat(sessionId = 'default') {
  *
  * @param {Object} params
  * @param {string[]|null} [params.docIds=null] - Document IDs to summarize (null = all)
+ * @param {string} [params.artifactType='briefing'] - Artifact type to generate (briefing, study_guide, faq, timeline)
  * @param {function(string): void} params.onToken - Called for each emitted token
  * @param {function(string): void} params.onError - Called on error
  * @param {function(): void} params.onDone - Called when streaming completes
@@ -222,11 +223,13 @@ export async function clearChat(sessionId = 'default') {
  */
 export function streamSummary({
   docIds = null,
+  artifactType = 'briefing',
   onToken = () => {},
   onError = () => {},
   onDone = () => {},
 }) {
   const controller = new AbortController();
+  const safeArtifactType = typeof artifactType === 'string' ? artifactType : 'briefing';
 
   (async () => {
     try {
@@ -238,6 +241,7 @@ export function streamSummary({
         },
         body: JSON.stringify({
           doc_ids: docIds && docIds.length > 0 ? docIds : null,
+          artifact_type: safeArtifactType,
           stream: true,
         }),
         signal: controller.signal,

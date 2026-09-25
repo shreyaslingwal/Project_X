@@ -13,6 +13,7 @@ Endpoints:
 import json
 import logging
 import shutil
+from collections import defaultdict
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
@@ -316,6 +317,10 @@ async def studio_summary(request: SummaryRequest):
         data: {"type": "done"}
 
     When stream=False, returns a JSON SummaryResponse.
+
+    Automatically routes to cross-source synthesis mode when multiple
+    documents are in scope, using stratified chunk sampling and dedicated
+    comparative prompts.
     """
     chunks, matched_ids, doc_count = _get_chunks_for_docs(request.doc_ids)
 
@@ -325,19 +330,30 @@ async def studio_summary(request: SummaryRequest):
             detail="No indexed chunks found for the requested documents.",
         )
 
-    # Build a human-readable scope label for the prompt
     vs = _get_vector_store()
     doc_list = vs.list_documents()
     id_to_name = {d["doc_id"]: d["source"] for d in doc_list}
+
     if len(matched_ids) == 1:
         source_name = id_to_name.get(matched_ids[0], "the selected document")
     else:
         source_name = f"{doc_count} selected documents"
 
+    chunks_by_doc: dict[str, list] = defaultdict(list)
+    for chunk in chunks:
+        chunks_by_doc[chunk.metadata.doc_id].append(chunk)
+    chunks_by_doc = dict(chunks_by_doc)
+
     summarizer = _get_summarizer()
 
     if not request.stream:
-        summary_text = summarizer.summarize(chunks, source_name=source_name)
+        summary_text = summarizer.summarize(
+            chunks,
+            source_name=source_name,
+            artifact_type=request.artifact_type,
+            chunks_by_doc=chunks_by_doc,
+            id_to_name=id_to_name,
+        )
         return SummaryResponse(
             summary=summary_text,
             doc_count=doc_count,
@@ -348,7 +364,11 @@ async def studio_summary(request: SummaryRequest):
     async def event_generator():
         try:
             async for event in summarizer.astream_summary(
-                chunks, source_name=source_name
+                chunks,
+                source_name=source_name,
+                artifact_type=request.artifact_type,
+                chunks_by_doc=chunks_by_doc,
+                id_to_name=id_to_name,
             ):
                 if event.type == "token":
                     payload = json.dumps({"type": "token", "content": event.content})

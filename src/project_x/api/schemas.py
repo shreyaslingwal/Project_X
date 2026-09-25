@@ -89,6 +89,10 @@ class SummaryRequest(BaseModel):
     doc_ids: list[str] | None = Field(
         default=None, description="Document IDs to summarize (None = all indexed)"
     )
+    artifact_type: str = Field(
+        default="briefing",
+        description="Artifact format: 'briefing' | 'study_guide' | 'faq' | 'timeline'",
+    )
     stream: bool = Field(default=True, description="Enable SSE token streaming")
 
 

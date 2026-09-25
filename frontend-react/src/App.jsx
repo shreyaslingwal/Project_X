@@ -41,6 +41,7 @@ export default function App() {
 
   // Studio state
   const [studioSelectedDocId, setStudioSelectedDocId] = useState('all');
+  const [activeArtifactType, setActiveArtifactType] = useState('briefing');
   const [summaries, setSummaries] = useState({}); // { [scopeKey]: summaryText }
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [summaryError, setSummaryError] = useState(null);
@@ -283,21 +284,23 @@ export default function App() {
     [inputQuery, isStreaming, selectedDocIds, activeNotebookId]
   );
 
-  // Studio: compute the summary cache key based on current scope
+  // Studio: compute the summary cache key based on current scope and artifact type
   const getSummaryScopeKey = useCallback(
-    (docId) => {
+    (docId, artifactType) => {
+      const artType = typeof artifactType === 'string' ? artifactType : activeArtifactType;
       if (docId === 'all') {
         const sortedIds = Array.from(selectedDocIds).sort().join(',');
-        return `all:${sortedIds}`;
+        return `${artType}:all:${sortedIds}`;
       }
-      return docId;
+      return `${artType}:${docId}`;
     },
-    [selectedDocIds]
+    [selectedDocIds, activeArtifactType]
   );
 
-  // Studio: generate document summary with SSE streaming
-  const handleGenerateSummary = useCallback(() => {
-    const scopeKey = getSummaryScopeKey(studioSelectedDocId);
+  // Studio: generate document summary/artifact with SSE streaming
+  const handleGenerateSummary = useCallback((artifactType) => {
+    const artType = typeof artifactType === 'string' ? artifactType : activeArtifactType;
+    const scopeKey = getSummaryScopeKey(studioSelectedDocId, artType);
 
     // Cancel any running summary stream
     if (summaryControllerRef.current) {
@@ -315,6 +318,7 @@ export default function App() {
 
     summaryControllerRef.current = streamSummary({
       docIds,
+      artifactType: artType,
       onToken: (token) => {
         setSummaries((prev) => ({
           ...prev,
@@ -329,19 +333,19 @@ export default function App() {
         setIsSummarizing(false);
       },
     });
-  }, [studioSelectedDocId, selectedDocIds, getSummaryScopeKey]);
+  }, [studioSelectedDocId, selectedDocIds, activeArtifactType, getSummaryScopeKey]);
 
-  // Studio: regenerate (clear cache and re-run)
+  // Studio: regenerate (clear cache for active artifact and re-run)
   const handleRegenerateSummary = useCallback(() => {
-    const scopeKey = getSummaryScopeKey(studioSelectedDocId);
+    const scopeKey = getSummaryScopeKey(studioSelectedDocId, activeArtifactType);
     setSummaries((prev) => {
       const next = { ...prev };
       delete next[scopeKey];
       return next;
     });
     // Trigger after state clears
-    setTimeout(() => handleGenerateSummary(), 0);
-  }, [studioSelectedDocId, getSummaryScopeKey, handleGenerateSummary]);
+    setTimeout(() => handleGenerateSummary(activeArtifactType), 0);
+  }, [studioSelectedDocId, activeArtifactType, getSummaryScopeKey, handleGenerateSummary]);
 
   // Studio: handle summarize button click from document card
   const handleSummarizeDoc = useCallback(
@@ -349,21 +353,22 @@ export default function App() {
       setStudioSelectedDocId(docId);
       setRightPanelMode('studio');
       setIsRightPanelOpen(true);
-      // Auto-generate if no cached summary
-      const scopeKey = getSummaryScopeKey(docId);
+      // Auto-generate if no cached summary for the active artifact type
+      const scopeKey = getSummaryScopeKey(docId, activeArtifactType);
       if (!summaries[scopeKey]) {
         // Delay to let state settle before triggering
         setTimeout(() => {
           setIsSummarizing(true);
           setSummaryError(null);
-          setSummaries((prev) => ({ ...prev, [docId]: '' }));
+          setSummaries((prev) => ({ ...prev, [scopeKey]: '' }));
 
           summaryControllerRef.current = streamSummary({
             docIds: [docId],
+            artifactType: activeArtifactType,
             onToken: (token) => {
               setSummaries((prev) => ({
                 ...prev,
-                [docId]: (prev[docId] || '') + token,
+                [scopeKey]: (prev[scopeKey] || '') + token,
               }));
             },
             onError: (err) => {
@@ -377,7 +382,7 @@ export default function App() {
         }, 50);
       }
     },
-    [getSummaryScopeKey, summaries]
+    [getSummaryScopeKey, activeArtifactType, summaries]
   );
 
   // Studio: handle suggested query chip click
@@ -392,7 +397,7 @@ export default function App() {
   );
 
   // Get current summary text from cache
-  const currentScopeKey = getSummaryScopeKey(studioSelectedDocId);
+  const currentScopeKey = getSummaryScopeKey(studioSelectedDocId, activeArtifactType);
   const currentSummaryText = summaries[currentScopeKey] || '';
 
   return (
@@ -461,6 +466,8 @@ export default function App() {
             selectedDocIds={selectedDocIds}
             studioSelectedDocId={studioSelectedDocId}
             onStudioDocChange={setStudioSelectedDocId}
+            activeArtifactType={activeArtifactType}
+            onArtifactTypeChange={setActiveArtifactType}
             summaryText={currentSummaryText}
             isSummarizing={isSummarizing}
             onGenerateSummary={handleGenerateSummary}

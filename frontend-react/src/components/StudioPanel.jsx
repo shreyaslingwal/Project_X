@@ -19,7 +19,49 @@ import {
   Zap,
   BookOpen,
   Layers,
+  GraduationCap,
+  HelpCircle,
+  Clock,
 } from 'lucide-react';
+
+const ARTIFACT_TYPES = [
+  {
+    id: 'briefing',
+    label: 'Briefing',
+    icon: FileText,
+    title: 'Document Briefing',
+    description: 'Structured executive overview with key topics, core takeaways, and follow-up questions.',
+    actionLabel: 'Generate Briefing',
+    generatingLabel: 'Generating briefing...',
+  },
+  {
+    id: 'study_guide',
+    label: 'Study Guide',
+    icon: GraduationCap,
+    title: 'Study Guide',
+    description: 'Comprehensive study guide with vocabulary glossary, section breakdowns, and review questions with answers.',
+    actionLabel: 'Generate Study Guide',
+    generatingLabel: 'Generating study guide...',
+  },
+  {
+    id: 'faq',
+    label: 'FAQ',
+    icon: HelpCircle,
+    title: 'Frequently Asked Questions',
+    description: 'Direct Q&A pairs grounded in specific source document sections.',
+    actionLabel: 'Generate FAQ',
+    generatingLabel: 'Generating FAQ...',
+  },
+  {
+    id: 'timeline',
+    label: 'Timeline',
+    icon: Clock,
+    title: 'Timeline & Milestones',
+    description: 'Chronological events, stages, and milestones extracted from the documents.',
+    actionLabel: 'Generate Timeline',
+    generatingLabel: 'Generating timeline...',
+  },
+];
 
 export default function StudioPanel({
   // Panel state
@@ -33,6 +75,8 @@ export default function StudioPanel({
   selectedDocIds,
   studioSelectedDocId,  // 'all' | specific doc_id
   onStudioDocChange,
+  activeArtifactType = 'briefing',
+  onArtifactTypeChange = () => {},
   summaryText,
   isSummarizing,
   onGenerateSummary,
@@ -135,6 +179,31 @@ export default function StudioPanel({
     return doc ? doc.source : 'Selected Document';
   }, [studioSelectedDocId, selectedDocIds, documents]);
 
+  const currentArtifact = React.useMemo(() => {
+    return ARTIFACT_TYPES.find((a) => a.id === activeArtifactType) || ARTIFACT_TYPES[0];
+  }, [activeArtifactType]);
+
+  const isMultiSource = studioSelectedDocId === 'all' && selectedDocIds && selectedDocIds.size > 1;
+  const activeDocCount = selectedDocIds ? selectedDocIds.size : 0;
+
+  const displayTitle = isMultiSource
+    ? `Cross-Source ${currentArtifact.title}`
+    : currentArtifact.title;
+
+  const displayDescription = isMultiSource
+    ? `Comparative synthesis across ${activeDocCount} active documents with cross-cutting themes, contrasts, and source attribution.`
+    : currentArtifact.description;
+
+  const displayActionLabel = isMultiSource
+    ? `Generate Cross-Source ${currentArtifact.label}`
+    : currentArtifact.actionLabel;
+
+  const displayGeneratingLabel = isMultiSource
+    ? `Synthesizing ${activeDocCount} sources...`
+    : currentArtifact.generatingLabel;
+
+  const CurrentArtifactIcon = currentArtifact.icon;
+
   if (!isOpen) {
     return (
       <button
@@ -216,15 +285,55 @@ export default function StudioPanel({
       {/* Panel Content */}
       {panelMode === 'studio' ? (
         <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Artifact Type Toolbar */}
+          <div className="p-3 bg-surface-low/40 border-b border-neutral-border/40 flex-shrink-0">
+            <div className="flex items-center justify-between mb-1.5 px-0.5">
+              <span className="text-[10px] uppercase tracking-wider text-neutral-muted font-bold">
+                Studio Artifact
+              </span>
+              <span className="text-[10px] font-semibold text-primary px-1.5 py-0.5 rounded bg-primary-fixed/50">
+                {currentArtifact.label}
+              </span>
+            </div>
+            <div className="grid grid-cols-4 gap-1 p-1 bg-surface-lowest rounded-xl border border-neutral-border/50">
+              {ARTIFACT_TYPES.map((art) => {
+                const Icon = art.icon;
+                const isActive = activeArtifactType === art.id;
+                return (
+                  <button
+                    key={art.id}
+                    onClick={() => onArtifactTypeChange(art.id)}
+                    className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-lg text-[10px] transition-all cursor-pointer ${
+                      isActive
+                        ? 'bg-primary text-white shadow-xs font-bold'
+                        : 'text-neutral-muted hover:text-neutral-dark hover:bg-surface-container/60 font-medium'
+                    }`}
+                    title={art.title}
+                  >
+                    <Icon className={`w-3.5 h-3.5 mb-0.5 ${isActive ? 'text-white' : 'text-neutral-muted'}`} />
+                    <span className="truncate max-w-full">{art.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Scope Selector */}
-          <div className="p-4 border-b border-neutral-border/40 flex-shrink-0">
-            <label className="text-[10px] uppercase tracking-wider text-neutral-muted font-bold mb-1.5 block">
-              Summarize Scope
-            </label>
+          <div className="px-4 py-2.5 border-b border-neutral-border/40 flex-shrink-0">
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10px] uppercase tracking-wider text-neutral-muted font-bold">
+                Source Scope
+              </label>
+              <span className="text-[10px] text-neutral-muted font-mono">
+                {studioSelectedDocId === 'all'
+                  ? `${selectedDocIds ? selectedDocIds.size : 0} active`
+                  : '1 source'}
+              </span>
+            </div>
             <select
               value={studioSelectedDocId}
               onChange={(e) => onStudioDocChange(e.target.value)}
-              className="w-full px-3 py-2 bg-surface-low border border-neutral-border/60 rounded-lg text-xs text-neutral-dark font-body focus:outline-hidden focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all cursor-pointer"
+              className="w-full px-3 py-1.5 bg-surface-low border border-neutral-border/60 rounded-lg text-xs text-neutral-dark font-body focus:outline-hidden focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all cursor-pointer"
             >
               <option value="all">All Active Sources ({selectedDocIds ? selectedDocIds.size : 0})</option>
               {documents.map((doc) => (
@@ -241,25 +350,30 @@ export default function StudioPanel({
               /* Generate Action Card */
               <div className="flex flex-col items-center justify-center text-center py-10 px-4">
                 <div className="w-14 h-14 rounded-2xl bg-primary-fixed/60 flex items-center justify-center mb-4">
-                  <BookOpen className="w-7 h-7 text-primary" />
+                  <CurrentArtifactIcon className="w-7 h-7 text-primary" />
                 </div>
                 <h3 className="font-display font-bold text-base text-neutral-dark mb-2">
-                  Document Briefing
+                  {displayTitle}
                 </h3>
                 <p className="text-xs text-neutral-muted leading-relaxed mb-5 max-w-[260px]">
-                  Generate a structured summary with key topics, core takeaways,
-                  and follow-up questions from your sources.
+                  {displayDescription}
                 </p>
+                {isMultiSource && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-primary-fixed/50 text-primary text-[10px] font-bold rounded-full mb-3">
+                    <Sparkles className="w-3 h-3" />
+                    Synthesizing {activeDocCount} Active Documents
+                  </span>
+                )}
                 <p className="text-[11px] text-neutral-light mb-4 font-mono">
                   {scopeLabel}
                 </p>
                 <button
-                  onClick={onGenerateSummary}
+                  onClick={() => onGenerateSummary(activeArtifactType)}
                   disabled={!documents || documents.length === 0}
                   className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-medium text-sm hover:bg-primary-hover shadow-sm transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-md active:scale-[0.98]"
                 >
                   <Zap className="w-4 h-4" />
-                  Generate Briefing
+                  {displayActionLabel}
                 </button>
               </div>
             ) : (
@@ -310,7 +424,7 @@ export default function StudioPanel({
                     {isSummarizing && (
                       <div className="flex items-center gap-2 mt-3 text-primary text-[11px]">
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span className="font-medium">Generating briefing...</span>
+                        <span className="font-medium">{displayGeneratingLabel}</span>
                       </div>
                     )}
                   </div>
@@ -359,7 +473,7 @@ export default function StudioPanel({
                       )}
                     </button>
                     <button
-                      onClick={onRegenerateSummary}
+                      onClick={() => onRegenerateSummary()}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-low border border-neutral-border/50 rounded-lg text-[11px] text-neutral-muted hover:text-primary hover:border-primary/30 transition-all cursor-pointer"
                     >
                       <RefreshCw className="w-3 h-3" />
